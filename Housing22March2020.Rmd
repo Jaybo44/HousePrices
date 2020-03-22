@@ -1,0 +1,371 @@
+---
+title: "House Prices"
+author: "Jason Smith"
+date: "January 24, 2020"
+output:
+  word_document:
+    toc: yes
+    toc_depth: '2'
+  html_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: 2
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+\newpage
+
+
+\newline
+
+\newline
+
+\newline
+
+\newline
+
+\newline
+
+\newline
+
+\newline
+
+\newline
+
+\newline
+
+\newline
+
+\newline
+
+\newline
+
+\newline
+
+\newline
+
+\newline
+
+
+
+# Load the data set
+
+```{r}
+train_raw = read.csv("train.csv")
+test_raw = read.csv("test.csv")
+```
+
+
+# Summary of Missing Data
+
+```{r}
+
+dim(train_raw)
+missing_per = sapply(train_raw, function(x) round(sum(is.na(x))/1460, 2) )
+missing_count = sapply(train_raw, function(x) sum(is.na(x)) )
+
+missing_per[order(missing_per, decreasing = T)]
+
+#summary(train_raw)
+
+```
+
+```{r}
+missing_per_test = sapply(test_raw, function(x) round(sum(is.na(x))/1460, 2) )
+missing_per_test[order(missing_per_test, decreasing = T)]
+```
+
+
+# Data Cleaning
+
+## Step 1: Remove variables with more than 10% missing data
+
+## Step 2: Use Random Forest Imputation on training and test sets for variables less than 10%
+
+```{r}
+library(missForest)
+library(dplyr)
+
+# # Comment out the code so do not run this multiple times. Uncomment to run in need to.
+# 
+# set.seed(2020)
+# 
+# # Data processing for training set.
+# data_raw_train  = train_raw
+# data_raw2_train = select(data_raw_train, -PoolQC, -MiscFeature,
+#                    -Alley, -Fence, -FireplaceQu,
+#                    -LotFrontage, -SalePrice)
+# data_imp_train = missForest(data_raw2_train)
+# training = data_imp_train$ximp
+# 
+# set.seed(2020)
+# 
+# # Data processing for test set.
+# data_raw_test  = test_raw
+# data_raw2_test = select(data_raw_test, -PoolQC, -MiscFeature,
+#                    -Alley, -Fence, -FireplaceQu,
+#                    -LotFrontage)
+# data_imp_test = missForest(data_raw2_test)
+# test = data_imp_test$ximp
+# 
+# 
+# # Export the imputed training and test data sets so we can read them in directly
+# # and not have to redo the random forest imputation every we run the code.
+# 
+# # Uncomment to Export the data.
+# write.csv(training, "training_imputed.csv", row.names = F)
+# write.csv(test, "test_imputed.csv", row.names = F)
+
+```
+
+
+```{r}
+
+# Read in the data from here. 
+
+training = read.csv("training_imputed.csv")
+test = read.csv("test_imputed.csv")
+
+```
+
+
+
+```{r}
+
+# Function to Seperate training data set into train and validation sets.
+
+# The splitting function
+split.data = function(data, train.prop, set.seed=NA){
+  
+  if(!is.na(set.seed)){set.seed(set.seed)}
+  
+  train.idx = sample(1:dim(data)[1], round(dim(data)[1]*train.prop), replace = F)
+  test.idx = setdiff(1:dim(data)[1], train.idx)
+  
+  train.set = data[train.idx,]
+  test.set = data[test.idx,]
+  
+  return(list(train=train.set, test= test.set))
+  
+}
+
+```
+
+
+
+# Separating the data into training and validation sets
+
+
+```{r}
+
+# Choosing the proportion to Separate into training and validation sets. We used 50% and 70%. 
+
+train.prop = 0.7
+
+# Reattach the y variable SalePrice back to the dataset. 
+
+training$SalePrice = train_raw$SalePrice
+
+# Spliting the dataset. 
+
+data_slipt = split.data(data = training, train.prop = train.prop, set.seed=2020)
+training_set = data_slipt$train; validation_set = data_slipt$test
+
+# Creating the data sets with only numeric variables. 
+
+#Training dataset
+num_col = sapply(training_set, is.numeric)
+training_set_num = training_set[, num_col][,-1]
+dim(training_set_num)
+
+#validation dataset
+num_col = sapply(validation_set, is.numeric)
+validation_set_num = validation_set[, num_col][,-1]
+dim(validation_set_num)
+
+```
+
+# Fitting Elastic-Net Regularized General Linear Models
+
+```{r}
+
+require(glmnet)
+
+# Scale the data and Create the Data matrix X
+
+train.data <- model.matrix(SalePrice~.,as.data.frame(scale(training_set_num)))
+test.data <- model.matrix(SalePrice~.,as.data.frame(scale(validation_set_num)))
+labels.train <- training_set_num$SalePrice
+labels.test <- validation_set_num$SalePrice  
+
+x = train.data 
+y <- labels.train
+
+
+# Fitting the glm. 
+rr.mod <- glmnet(x,y,family="gaussian",alpha=1) 
+
+# We perform cross-validation.
+cv.rr <- cv.glmnet(x,y,family="gaussian",alpha=1) 
+
+# THis is the smallest value of lambda. 
+lambda = cv.rr$lambda.min
+lambda
+# If choose this lambda then we can get the estimates. 
+coef.min <- coef(cv.rr, s = "lambda.min") # Here s is lambda. Tells to use minmum labmbda from cv.rr. 
+
+# Below we print to see the glmnet estimated coefficient values.
+coef.min
+
+# We will get the predicted house sale prices for the test data using the fitted glmnet model. 
+
+predictions1 = as.numeric(predict(rr.mod, newx=test.data, s= cv.rr$lambda.min))
+
+
+# Fit the classical regression models with all the variables, then using only numeric variables
+# and lastly no variables which is the null model and is simply the average house sale price. Our models 
+# should at least perform better than the null model.  
+
+model_regularReg_full = lm(SalePrice ~., data = training_set[,-1]) # Regression: All the variables
+model_regularReg_num = lm(SalePrice ~ ., data = training_set_num) # Regression: Numerical variables
+model_null = lm(SalePrice ~ 1, data = training_set_num) # Null model: calculates the average house price
+
+# Function to get rmse 
+
+rmse_fun = function(model, testdata) {
+  
+    #   Test 
+    #model = model_regularReg_full
+    #testdata = validation_set
+  
+    test_labels = as.numeric(testdata[,"SalePrice"])
+    pred =  predict(model, newx=select(testdata, -SalePrice))
+    rmse = sqrt(mean((test_labels - pred)^2))
+    return(rmse)
+  
+}
+
+
+# Get the rmse for the different regression models. 
+
+rmse_regularReg_null = rmse_fun(model_null, validation_set_num)
+rmse_regularReg_full = rmse_fun(model_regularReg_full, validation_set)
+rmse_regularReg_num = rmse_fun(model_regularReg_num, validation_set_num)
+rmse_glmnet = sqrt(mean((predictions1 - labels.test)^2))
+
+# Just get the raw rmse values for the different models. 
+paste0("rmse_regularReg_null: ", round(rmse_regularReg_null, 2), ", rmse_glmnet: ", round(rmse_glmnet, 2), ", rmse_regularReg_num: ", round(rmse_regularReg_num, 2), ", rmse_regularReg_full: ", round(rmse_regularReg_full, 2)) # rmse_glmnet is the lowest
+
+# Here we divide the rmse's by the rmse of the null model to clearly see which models perform better
+# than the null model. 
+
+c(rmse_regularReg_null, rmse_glmnet, rmse_regularReg_num, rmse_regularReg_full)/rmse_regularReg_null
+
+```
+
+
+# Fitting Partial Least Square Regression. 
+
+
+```{r}
+
+# DO THE PARTIAL LEAST SQUARES REGRESSIONS. 
+
+library(pls)
+
+n.score.vec <- c(5, 6, 7, 8, 10, 11, 13, 16) # of score vecotrs to try
+
+pdf(paste0('pls_mse_plots_train_perc70.pdf'), height=15, width=10)
+par(mfrow=c(2,1))
+
+for (score.idx in 1:length(n.score.vec)) {
+	n.comp = n.score.vec[score.idx]
+  print(n.comp)
+  
+  #Use plsr built in cross validation
+  pls.fit <- plsr(SalePrice ~ ., data=training_set_num, ncomp = n.comp,
+                  validation="CV",scale=T)
+	plot(MSEP(pls.fit))
+  
+}
+dev.off()
+
+#Plot the MSE
+plot(MSEP(pls.fit))
+
+#Save the plot of the MSE
+pdf(paste0('pls_mse_comp16_plots_train_perc70.pdf'))
+plot(MSEP(pls.fit))
+dev.off()
+
+# Save the cross-validation MSE corresponding to the number of componenets. 
+# The number of components that is greater than 2 and that produces the lowest MSE will
+# be chosen as the optimum number of components to be used for the partial least square regression.
+
+sink("pls16comp_summary_train_perc70.txt")
+print(summary(pls.fit))
+sink()
+
+
+# Using the above training results we choose the optimum number of components below as opt.comp to be used for the final pls model. 
+
+# We found for 50% and 70% of data used for training that the optimum number of components are opt.comp = 4 and opt.comp = 7 respectively. As it has the smallest MSE after 2 components, and we do not want number of components to be less than 3. 
+
+######################
+
+#We will now set opt.comp = 7. 
+
+opt.comp = 7
+
+# We will fit the plsr using ncomp = opt.comp. 
+
+plsr.opt.te = plsr(SalePrice~., data=validation_set_num, ncomp = opt.comp, validation="none",scale=T)
+
+# Extract the estimated Sale Prices from the fitted plsr model. 
+predict_plsr = plsr.opt.te$fitted.values 
+
+# Calculate the RMSE for the plsr. 
+rmse_plsr_opt.comp_7_train_per70 = sqrt(mean((labels.test - predict_plsr)^2))
+rmse_plsr_opt.comp_7_train_per70
+
+
+#rmse_plsr_opt.comp_4_train_per50
+
+# We can see that rmse_plsr_opt.comp_4_train_per50 = 28396.45 and rmse_plsr_opt.comp_7_train_per70 27295.49. Hence, 7 components is better to be used. 
+
+```
+
+
+# Fitting the Random Forest Regression. 
+
+```{r}
+
+# Do the Random Forest Regression. 
+
+require(randomForest)
+require(dplyr)
+
+# Fit the random forest regression using the default values of the hyper parameters. 
+rf = randomForest(SalePrice ~., data = training_set  )
+
+# Get the predicted house sale prices using the fitted random forest. 
+pred_rf = predict(rf, newdata = select(validation_set, -SalePrice)) 
+
+# Obtain the rmse for the random forst model. 
+rmse_rf_train_perc70 =  sqrt(mean((labels.test - pred_rf)^2))
+
+rmse_rf_train_perc70
+
+#rmse_rf_train_perc50
+
+# We find that the rmse for random forest rmse for 50% is 25547.81
+# and that the random forest rmse for 70% is 24155.2
+
+
+```
+
